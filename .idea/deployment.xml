@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="student@sds2021w-0010.eastus.cloudapp.azure.com:22" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="student@ir2021w-0000.eastus.cloudapp.azure.com:22">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="student@sds2021w-0010.eastus.cloudapp.azure.com:22">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/student/Desktop" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="yehonatan-pe@shalit-srv1.iem.technion.ac.il:22">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>

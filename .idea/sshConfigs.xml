@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="SshConfigs">
+    <configs>
+      <sshConfig authType="PASSWORD" host="sds2021w-0010.eastus.cloudapp.azure.com" id="3f32831f-2dc1-4a06-a1b3-18152f2ebdc7" port="22" nameFormat="DESCRIPTIVE" username="student" useOpenSSHConfig="true" />
+    </configs>
+  </component>
+</project>
