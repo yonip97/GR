@@ -1,5 +1,8 @@
 #Created by Adam Goldbraikh - Scalpel Lab Technion
 # parts of the code were adapted from: https://github.com/sj-li/MS-TCN2?utm_source=catalyzex.com
+import time
+
+import torch
 
 from model import *
 import sys
@@ -12,7 +15,8 @@ from metrics import*
 import wandb
 from datetime import datetime
 import tqdm
-
+from torchvision.models import resnet50
+from torch.utils.data import DataLoader
 
 class Trainer:
     def __init__(self, dim, num_classes_list,hidden_dim=64,dropout=0.4,num_layers=3, offline_mode=True, task="gestures", device="cuda",
@@ -20,8 +24,8 @@ class Trainer:
 
         self.model = MT_RNN_dp(network, input_dim=dim, hidden_dim=hidden_dim, num_classes_list=num_classes_list,
                             bidirectional=offline_mode, dropout=dropout,num_layers=num_layers)
-
-
+        self.pretrained_image_model = resnet50(pretrained=True)
+        self.video_model = MultiStageModel(4,10,65,1000,6)
         self.debagging = debagging
         self.network = network
         self.device = device
@@ -40,8 +44,8 @@ class Trainer:
         print(args.dataset + " " + args.group + " " + args.dataset + " dataset " + "split: " + args.split)
 
         if args.upload is True:
-            wandb.init(project=args.project, group= args.group,
-                       name="split: " + args.split,
+            wandb.init(project=args.project, group= 'baseline GRU' + args.group,
+                       name="split: " + args.split,entity="yuvalyoni",
                        reinit=True)
             delattr(args, 'split')
             wandb.config.update(args)
@@ -57,6 +61,7 @@ class Trainer:
             total1 = 0
 
             while batch_gen.has_next():
+                #batch_input, batch_target_gestures = batch_gen.next_batch_video()
                 batch_input, batch_target_gestures, mask = batch_gen.next_batch(batch_size)
                 batch_input, batch_target_gestures, mask = batch_input.to(self.device), batch_target_gestures.to(
                     self.device), mask.to(self.device)
@@ -113,6 +118,92 @@ class Trainer:
 
         return eval_results_list, train_results_list
 
+    def train_videos(self, save_dir, batch_gen, num_epochs, batch_size, learning_rate, eval_dict, args):
+
+        number_of_batches= len(batch_gen.list_of_train_video_examples)
+
+        eval_results_list = []
+        train_results_list = []
+        print(args.dataset + " " + args.group + " " + args.dataset + " dataset " + "split: " + args.split)
+
+        if args.upload is True:
+            wandb.init(project=args.project, group= args.group,
+                       name="split: " + args.split,
+                       reinit=True)
+            delattr(args, 'split')
+            wandb.config.update(args)
+
+        self.model.train()
+        self.pretrained_image_model.to(self.device)
+        self.video_model.to(self.device)
+        eval_rate = eval_dict["eval_rate"]
+        optimizer = optim.Adam(self.video_model.parameters(), lr=learning_rate)
+        for epoch in range(num_epochs):
+            pbar = tqdm.tqdm(total=number_of_batches)
+            epoch_loss = 0
+            correct1 = 0
+            total1 = 0
+            preproccess_time = 0
+            while batch_gen.has_next():
+                optimizer.zero_grad()
+                batch_input, batch_target_gestures = batch_gen.next_batch_video()
+                batch_input,batch_target_gestures = batch_input.to(self.device),batch_target_gestures.to(self.device)
+                batch_features = []
+                start = time.time()
+                with torch.no_grad():
+                    dataloader = DataLoader(batch_input,batch_size=128)
+                    for mini_batch in dataloader:
+                        batch_features.append(self.pretrained_image_model(mini_batch))
+                preproccess_time += time.time()-start
+                batch_features = torch.cat(batch_features,dim=0).permute((1,0)).requires_grad_()
+                batch_features = torch.unsqueeze(batch_features,0).cuda()
+
+                predictions1 = self.video_model(batch_features).squeeze().permute((1,0))
+
+
+                loss = self.ce(predictions1,batch_target_gestures.view(-1))
+
+
+                epoch_loss += loss.item()
+                loss.backward()
+                optimizer.step()
+                _, predicted1 = torch.max(predictions1, 1)
+                correct1 += (predicted1 == batch_target_gestures).sum()
+                total1 += len(predicted1)
+                pbar.update(1)
+            print(f"pre process time is {preproccess_time:.3f}")
+            batch_gen.reset()
+            pbar.close()
+            if not self.debagging:
+                torch.save(self.model.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".model")
+                torch.save(optimizer.state_dict(), save_dir + "/epoch-" + str(epoch + 1) + ".opt")
+            dt_string = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+            print(colored(dt_string, 'green',
+                          attrs=['bold']) + "  " + "[epoch %d]: train loss = %f,   train acc = %f" % (epoch + 1,
+                                                                                                      epoch_loss / len(
+                                                                                                          batch_gen.list_of_train_examples),
+                                                                                                      float(
+                                                                                                          correct1) / total1))
+            train_results = {"epoch": epoch, "train loss": epoch_loss / len(batch_gen.list_of_train_examples),
+                             "train acc": float(correct1) / total1}
+
+            if args.upload:
+                wandb.log(train_results)
+
+            train_results_list.append(train_results)
+
+            if (epoch) % eval_rate == 0:
+                print(colored("epoch: " + str(epoch + 1) + " model evaluation", 'red', attrs=['bold']))
+                results = {"epoch": epoch}
+                #TODO: add video evaluation
+                results.update(self.evaluate(eval_dict, batch_gen))
+                eval_results_list.append(results)
+                if args.upload is True:
+                    wandb.log(results)
+
+        return eval_results_list, train_results_list
+
+
     def evaluate(self, eval_dict, batch_gen):
         results = {}
         device = eval_dict["device"]
@@ -159,6 +250,49 @@ class Trainer:
             self.model.train()
             return results
 
+    def video_eval(self,eval_dict):
+        results = {}
+        device = eval_dict["device"]
+        features_path = eval_dict["features_path"]
+        sample_rate = eval_dict["sample_rate"]
+        actions_dict_gesures = eval_dict["actions_dict_gestures"]
+        ground_truth_path_gestures = eval_dict["gt_path_gestures"]
 
+        self.model.eval()
+        with torch.no_grad():
+            self.model.to(device)
+            list_of_vids = batch_gen.list_of_valid_examples
+            recognition1_list = []
+
+            for seq in list_of_vids:
+                # print vid
+                features = np.load(features_path + seq.split('.')[0] + '.npy')
+                input_x = torch.tensor(features, dtype=torch.float)
+                input_x.unsqueeze_(0)
+                input_x = input_x.to(device)
+                predictions1 = self.model(input_x, torch.tensor([features.shape[1]]))
+                predictions1 = predictions1[0].unsqueeze_(0)
+                predictions1 = torch.nn.Softmax(dim=2)(predictions1)
+
+                _, predicted1 = torch.max(predictions1[-1].data, 1)
+                predicted1 = predicted1.squeeze()
+
+
+                recognition1 = []
+                for i in range(len(predicted1)):
+                    recognition1 = np.concatenate((recognition1, [list(actions_dict_gesures.keys())[
+                                                                      list(actions_dict_gesures.values()).index(
+                                                                          predicted1[i].item())]] * sample_rate))
+                recognition1_list.append(recognition1)
+
+            print("gestures results")
+            results1, _ = metric_calculation(ground_truth_path=ground_truth_path_gestures,
+                                             recognition_list=recognition1_list, list_of_videos=list_of_vids,
+                                             suffix="gesture")
+            results.update(results1)
+
+
+            self.model.train()
+            return results
 
 
