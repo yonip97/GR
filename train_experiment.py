@@ -30,7 +30,7 @@ parser.add_argument('--hidden_dim',default =64, type=int )
 
 parser.add_argument('--normalization', choices=['none'], default='none', type=str)
 parser.add_argument('--offline_mode', default=True, type=bool)
-parser.add_argument('--project', default=" project name ", type=str)
+parser.add_argument('--project', default="surgical_data", type=str)
 parser.add_argument('--group', default=dt_string + " group ", type=str)
 parser.add_argument('--use_gpu_num',default ="0", type=str )
 parser.add_argument('--upload', default=True, type=bool)
@@ -133,6 +133,7 @@ for split_num in list_of_splits:
     batch_gen = BatchGenerator(num_classes_gestures,num_classes_tools, actions_dict_gestures,actions_dict_tools,features_path,split_num,folds_folder,gt_path_gestures, gt_path_tools_left, gt_path_tools_right, sample_rate=sample_rate,normalization=args.normalization,task=args.task)
     eval_dict ={"features_path":features_path,"actions_dict_gestures": actions_dict_gestures, "actions_dict_tools":actions_dict_tools, "device":device, "sample_rate":sample_rate,"eval_rate":eval_rate,
                 "gt_path_gestures":gt_path_gestures, "gt_path_tools_left":gt_path_tools_left, "gt_path_tools_right":gt_path_tools_right,"task":args.task}
+    #trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr,eval_dict=eval_dict,args=args)
     eval_results, train_results = trainer.train(model_dir, batch_gen, num_epochs=num_epochs, batch_size=bz, learning_rate=lr,eval_dict=eval_dict,args=args)
 
 
