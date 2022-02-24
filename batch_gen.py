@@ -6,7 +6,7 @@ import random
 import os
 import pandas as pd
 from scipy.stats import norm
-
+from torchvision import transforms
 
 
 class BatchGenerator(object):
@@ -41,6 +41,11 @@ class BatchGenerator(object):
         self.gt_path_gestures = gt_path_gestures
         self.gt_path_tools_left = gt_path_tools_left
         self.gt_path_tools_right = gt_path_tools_right
+        self.video_features_path = '/home/student/Desktop/tensors/'
+
+        self.transform = transforms.Compose([
+                transforms.ToTensor(),
+                transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))])
         self.features_path = features_path
         self.sample_rate = sample_rate
         self.read_data()
@@ -68,12 +73,14 @@ class BatchGenerator(object):
 
     def read_data(self):
         self.list_of_train_examples =[]
+        self.list_of_train_video_examples = []
         for file in os.listdir(self.folds_folder):
             filename = os.fsdecode(file)
             if filename.endswith(".txt") and "fold" in filename:
                 if str(self.split_num) in filename:
                     file_ptr = open(os.path.join(self.folds_folder, filename), 'r')
                     self.list_of_valid_examples = file_ptr.read().split('\n')[:-1]
+                    self.list_of_valid_video_examples = [file.split('.')[0] +'.pt' for file in self.list_of_valid_examples]
                     file_ptr.close()
                     random.shuffle(self.list_of_valid_examples)
                 else:
@@ -83,6 +90,7 @@ class BatchGenerator(object):
                 continue
             else:
                 continue
+        self.list_of_train_video_examples = [file.split('.')[0] for file in self.list_of_train_examples]
         random.shuffle(self.list_of_train_examples)
 
 
@@ -258,6 +266,26 @@ class BatchGenerator(object):
             return batch_input_tensor, batch_target_tensor_left ,batch_target_tensor_right,batch_target_tensor_gestures, mask
     ##### this is supports one and two heads#############
 
+    def next_batch_video(self):
+        video = self.list_of_train_video_examples[self.index]
+        self.index += 1
+        features = torch.load(self.video_features_path + video +'_side.pt').permute((0,2,3,1)).numpy()
+        batch_input_tensor = torch.stack([self.transform(features[i,:,:,:]) for i in range(len(features))])
+        file_ptr = open(self.gt_path_gestures + video + '.txt', 'r')
+        gt_source = file_ptr.read().split('\n')[:-1]
+        content = self.pars_ground_truth(gt_source)
+        content = content[::self.sample_rate]
+        classes = np.zeros(len(content))
+        for i in range(len(classes)):
+            classes[i] = self.actions_dict_gestures[content[i]]
+        batch_target_tensor = torch.tensor(classes,dtype=torch.long)
+        min_length = min(batch_input_tensor.size(0),batch_target_tensor.size(0))
+        return batch_input_tensor[:min_length,:,:,:], batch_target_tensor[:min_length]
+
+
+
+
+    ##### this is supports one and two heads#############
     def next_batch_backup(self, batch_size):
         batch = self.list_of_train_examples[self.index:self.index + batch_size]
         self.index += batch_size
