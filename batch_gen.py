@@ -64,11 +64,17 @@ class BatchGenerator(object):
         self.index = 0
         random.shuffle(self.list_of_train_examples)
 
+    def video_reset(self):
+        self.index = 0
+        random.shuffle(self.list_of_train_video_examples)
+
 
     def has_next(self):
         if self.index < len(self.list_of_train_examples):
             return True
         return False
+
+
 
 
     def read_data(self):
@@ -80,7 +86,7 @@ class BatchGenerator(object):
                 if str(self.split_num) in filename:
                     file_ptr = open(os.path.join(self.folds_folder, filename), 'r')
                     self.list_of_valid_examples = file_ptr.read().split('\n')[:-1]
-                    self.list_of_valid_video_examples = [file.split('.')[0] +'.pt' for file in self.list_of_valid_examples]
+                    self.list_of_valid_video_examples = [file.split('.')[0] for file in self.list_of_valid_examples]
                     file_ptr.close()
                     random.shuffle(self.list_of_valid_examples)
                 else:
@@ -115,28 +121,34 @@ class BatchGenerator(object):
         batch_target_gestures = []
         batch_target_left = []
         batch_target_right = []
-
+        batch_videos_input =[]
+        batch_target_gestures_mstcn =[]
         for seq in batch:
             features = np.load(self.features_path + seq.split('.')[0] + '.npy')
+            if self.normalization is not None:
+                features = self.normalize(features)
+            # if self.normalization == "Min-max":
+            #     numerator =features.T - self.min
+            #     denominator = self.max-self.min
+            #     features = (numerator / denominator).T
+            # elif self.normalization == "Standard":
+            #     numerator =features.T - self.mean
+            #     denominator = self.std
+            #     features = (numerator / denominator).T
+            # elif self.normalization == "samplewise_SD":
+            #     samplewise_meam = features.mean(axis=1)
+            #     samplewise_std = features.std(axis=1)
+            #     numerator =features.T - samplewise_meam
+            #     denominator = samplewise_std
+            #     features = (numerator / denominator).T
 
-            if self.normalization == "Min-max":
-                numerator =features.T - self.min
-                denominator = self.max-self.min
-                features = (numerator / denominator).T
-            elif self.normalization == "Standard":
-                numerator =features.T - self.mean
-                denominator = self.std
-                features = (numerator / denominator).T
-            elif self.normalization == "samplewise_SD":
-                samplewise_meam = features.mean(axis=1)
-                samplewise_std = features.std(axis=1)
-                numerator =features.T - samplewise_meam
-                denominator = samplewise_std
-                features = (numerator / denominator).T
+            batch_input.append(features[:, ::self.sample_rate])
 
-            batch_input .append(features[:, ::self.sample_rate])
+            video_features,target = self.get_video_data(seq.split('.')[0])
 
-
+            #video_features = torch.load(self.video_features_path + seq.split('.')[0] + '_side.pt')
+            batch_videos_input.append(video_features)
+            batch_target_gestures_mstcn.append(target)
             if self.task == "gestures":
                 file_ptr = open(self.gt_path_gestures + seq.split('.')[0] + '.txt', 'r')
                 gt_source = file_ptr.read().split('\n')[:-1]
@@ -211,8 +223,7 @@ class BatchGenerator(object):
                 batch_input_tensor[i, :, :np.shape(batch_input[i])[1]] = torch.from_numpy(batch_input[i][:,:batch_input_tensor.shape[2]])
                 batch_target_tensor[i, :np.shape(batch_target_gestures[i])[0]] = torch.from_numpy(batch_target_gestures[i])
                 mask[i, :, :np.shape(batch_target_gestures[i])[0]] = torch.ones(self.num_classes_gestures, np.shape(batch_target_gestures[i])[0])
-
-            return batch_input_tensor, batch_target_tensor, mask
+            return batch_input_tensor, batch_target_tensor, mask,batch_videos_input,batch_target_gestures_mstcn
 
         elif self.task == "tools":
             length_of_sequences_left = np.expand_dims(np.array( list(map(len, batch_target_left))),1)
@@ -265,12 +276,26 @@ class BatchGenerator(object):
 
             return batch_input_tensor, batch_target_tensor_left ,batch_target_tensor_right,batch_target_tensor_gestures, mask
     ##### this is supports one and two heads#############
+    def normalize(self,features):
+        if self.normalization == "Min-max":
+            numerator = features.T - self.min
+            denominator = self.max - self.min
+            features = (numerator / denominator).T
+        elif self.normalization == "Standard":
+            numerator = features.T - self.mean
+            denominator = self.std
+            features = (numerator / denominator).T
+        elif self.normalization == "samplewise_SD":
+            samplewise_meam = features.mean(axis=1)
+            samplewise_std = features.std(axis=1)
+            numerator = features.T - samplewise_meam
+            denominator = samplewise_std
+            features = (numerator / denominator).T
+        return features
 
-    def next_batch_video(self):
-        video = self.list_of_train_video_examples[self.index]
-        self.index += 1
-        features = torch.load(self.video_features_path + video +'_side.pt').permute((0,2,3,1)).numpy()
-        batch_input_tensor = torch.stack([self.transform(features[i,:,:,:]) for i in range(len(features))])
+
+    def get_video_data(self,video):
+        features_input_tensor = torch.load(self.video_features_path + video +'_side.pt')
         file_ptr = open(self.gt_path_gestures + video + '.txt', 'r')
         gt_source = file_ptr.read().split('\n')[:-1]
         content = self.pars_ground_truth(gt_source)
@@ -279,9 +304,30 @@ class BatchGenerator(object):
         for i in range(len(classes)):
             classes[i] = self.actions_dict_gestures[content[i]]
         batch_target_tensor = torch.tensor(classes,dtype=torch.long)
-        min_length = min(batch_input_tensor.size(0),batch_target_tensor.size(0))
-        return batch_input_tensor[:min_length,:,:,:], batch_target_tensor[:min_length]
+        min_length = min(features_input_tensor.size(0),batch_target_tensor.size(0))
+        return features_input_tensor[:min_length,:], batch_target_tensor[:min_length]
 
+    def next_batch_video(self):
+        video = self.list_of_train_video_examples[self.index]
+        self.index += 1
+        features_input_tensor = torch.load(self.video_features_path + video +'_side.pt')
+        file_ptr = open(self.gt_path_gestures + video + '.txt', 'r')
+        gt_source = file_ptr.read().split('\n')[:-1]
+        content = self.pars_ground_truth(gt_source)
+        content = content[::self.sample_rate]
+        classes = np.zeros(len(content))
+        for i in range(len(classes)):
+            classes[i] = self.actions_dict_gestures[content[i]]
+        batch_target_tensor = torch.tensor(classes,dtype=torch.long)
+        min_length = min(features_input_tensor.size(0),batch_target_tensor.size(0))
+        return features_input_tensor[:min_length,:], batch_target_tensor[:min_length]
+
+    def get_eval_videos(self):
+        videos = self.list_of_valid_video_examples
+        videos_features_tensors = []
+        for video in videos:
+            videos_features_tensors.append(torch.load(self.video_features_path + video +'_side.pt'))
+        return videos_features_tensors
 
 
 

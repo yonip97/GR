@@ -56,8 +56,8 @@ class MultiStageModel(nn.Module):
         outputs = out.unsqueeze(0)
         for s in self.stages:
             out = s(F.softmax(out, dim=1))
-            #outputs = torch.cat((outputs, out.unsqueeze(0)), dim=0)
-        return out
+            outputs = torch.cat((outputs, out.unsqueeze(0)), dim=0)
+        return outputs
 
 
 class SingleStageModel(nn.Module):
@@ -100,7 +100,6 @@ class MS_TCN2(nn.Module):
         for R in self.Rs:
             out = R(F.softmax(out, dim=1))
             outputs = torch.cat((outputs, out.unsqueeze(0)), dim=0)
-
         return outputs
 
 class Prediction_Generation(nn.Module):
@@ -158,4 +157,36 @@ class Refinement(nn.Module):
             out = layer(out)
         out = self.conv_out(out)
         return out
+
+class hybrid_model(nn.Module):
+    def __init__(self, num_stages, num_layers, num_f_maps, dim, num_classes,rnn_type,rnn_input_dim,rnn_hidden_dim,
+                 bidirectional,dropout,rnn_num_layers = 2,device = 'cuda'):
+            super(hybrid_model, self).__init__()
+            self.mctscn = MultiStageModel(num_stages, num_layers, num_f_maps, dim, num_classes)
+            self.rnn_model = MT_RNN_dp(rnn_type,rnn_input_dim,rnn_hidden_dim,[num_classes],bidirectional,dropout,rnn_num_layers)
+            self.softmax = nn.Softmax(dim=1)
+            self.num_classes = num_classes
+            self.device = device
+
+    def forward(self,videos_input,kinetic_input,lengths):
+        rnn_input = []
+        mstcn_predictions = []
+        mctscn_outputs = []
+        max_length_kinematics = max(lengths)
+        max_lengths_videos =max([video.size(2) for video in videos_input])
+        max_length = max(max_length_kinematics,max_lengths_videos)
+        for video in videos_input:
+            pred_mstcn = torch.zeros((self.num_classes,max_length)).to(self.device)
+            mctscn_output = self.mctscn.forward(video)
+            mctscn_outputs.append(mctscn_output)
+            pred_mstcn[:,:mctscn_output[-1].size(2)] = mctscn_output[-1].squeeze()
+            mstcn_predictions.append(self.softmax(pred_mstcn))
+        for pred,kinetic in zip(mstcn_predictions,kinetic_input):
+            kinetic_length = kinetic.size(1)
+            final_input = torch.cat((pred[:,:kinetic_length],kinetic),0)
+            rnn_input.append(final_input)
+
+        rnn_input = torch.stack(rnn_input)
+        final_predictions = self.rnn_model.forward(rnn_input,lengths)
+        return mctscn_outputs,final_predictions
 
